@@ -1,14 +1,18 @@
 program read_dr_file
-    implicit none
-    integer :: nprnti, nprntf, ntemps
+    use, intrinsic :: iso_fortran_env, only : iostat_end
+    implicit none    
+    integer :: nprnti, nprntf, ntemps, nlvl
     integer :: i, j, k, ios, transition_idx
     integer :: idx_i, idx_f
     character(len=256) :: line
+    logical :: eof 
     real, dimension(:,:,:), allocatable :: dr_rates
+    real, dimension(:,:),   allocatable :: dr_rates_total
+    real, dimension(:),     allocatable :: tempgrid
     
     ntemps = 19 
     
-    open(unit=10, file='adf09', status='old', action='read')
+    open(unit=10, file='adf09_3231', status='old', action='read')
     
     ! Extract array bounds from header
     do
@@ -17,7 +21,6 @@ program read_dr_file
         
         idx_i = index(line, 'NPRNTI=')
         idx_f = index(line, 'NPRNTF=')
-        
         if (idx_i > 0 .and. idx_f > 0) then
             read(line(idx_i+7:idx_f-1), *) nprnti
             read(line(idx_f+7:), *) nprntf
@@ -25,7 +28,22 @@ program read_dr_file
         end if
     end do
     
-    allocate(dr_rates(nprnti, nprntf, ntemps))
+    do
+        read(10, '(A)', iostat=ios) line
+        if (ios /= 0) stop "Error: NLVL header not found."
+        
+        idx_i = index(line, 'NLVL=')
+        if (idx_i > 0 ) then
+            read(line(idx_i+5:idx_i+5+3), *) nlvl
+            exit
+        end if
+    end do
+    print*, nlvl
+
+    allocate(dr_rates      (nprnti, nlvl, ntemps))
+    allocate(dr_rates_total(nprnti, ntemps)        )
+    allocate(tempgrid(ntemps)        )
+
     dr_rates = 0.0  ! Initialize so any skipped transitions default to 0.0
     
     ! Loop sequentially through PRTI blocks
@@ -46,8 +64,7 @@ program read_dr_file
         end do
         
         ! Read transitions, handling both internal skips and early block terminations
-        do j = 1, nprntf
-            
+        do j = 1, nlvl
             ! 1. Peek ahead to the next non-blank line
             do
                 read(10, '(A)', iostat=ios) line
@@ -83,16 +100,23 @@ program read_dr_file
         end do
         
     end do
+    eof = .false. 
+
+    do while (.not. eof) 
+        read(10, '(A8)', iostat=ios) line
+        if (ios == iostat_end) eof = .true. 
+        if (line .eq. '    T(K)') then 
+            !print*,line
+            read(10, '(A8)', iostat=ios) line
+            do k = 1, ntemps 
+                read(10, '(2X,ES8.2, 3X, 100(ES8.2,3X) )' ) tempgrid(k),(dr_rates_total(i,k),i=1,nprnti)
+            end do
+            exit 
+        end if 
+    end do 
     
+    !print*, dr_rates_total(1,:) / sum( dr_rates(1,:,:),dim=1)
+    !print*, shape(sum( dr_rates(1,:,:),dim=2))
     close(10)
-    !print*, dr_rates(1,9800,8)
-    !print '(19ES10.2)', sum( dr_rates(2,:,:),dim=1)
-    !print '(19ES10.2)', sum(dr_rates(58,:,8))
-    
-    print*, sum( dr_rates(1,1:25,8)) / sum( dr_rates(1,:,8))
-
-    !print*, sum( dr_rates(1:10,1:100,8)) / sum( dr_rates(1:10,:,8))
-
-    !print *, "Successfully read data, handling all skipped/missing edge cases."
-    
+    !print*, sum( dr_rates(1,1:25,8)) / sum( dr_rates(1,:,8))
 end program read_dr_file
